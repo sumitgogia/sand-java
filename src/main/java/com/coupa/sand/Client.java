@@ -29,10 +29,6 @@ public class Client {
     private static final Logger LOGGER = LoggerFactory.getLogger(Client.class);
     private static final String DEFAULT_CACHE_ROOT = "sand";
     private static final String DEFAULT_CLIENT_CACHE_TYPE = "resources";
-    private static final long DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 3_599L;
-    private static final String TOKEN_EXPIRES_PROPERTY = "expires";
-    private static final String TOKEN_EXPIRES_IN_PROPERTY = "expires_in";
-    private static final String ACCESS_TOKEN_PROPERTY = "access_token";
 
     protected static final String DEFAULT_TOKEN_PATH = "/oauth2/token";
     protected static final int DEFAULT_RETRY_COUNT = 5;
@@ -48,20 +44,13 @@ public class Client {
      * Cache to avoid repeated calls to SAND authentication server.
      * Tokens are cached for 1 hour.
      */
-    private static final Cache<String, JSONObject> cTokenCache =
+    private static final Cache<String, TokenResponse> cTokenCache =
             CacheBuilder
-                    .newBuilder()
-                    .concurrencyLevel(4)
-                    .maximumSize(1000)
-                    .expireAfterWrite(1L, TimeUnit.HOURS)
-                    .build();
-
-    /**
-     * Default constructor.
-     */
-    public Client() {
-        // pass
-    }
+            .newBuilder()
+            .concurrencyLevel(4)
+            .maximumSize(1000)
+            .expireAfterWrite(1L, TimeUnit.HOURS)
+            .build();
 
     /**
      * Constructor that sets the default tokenPath
@@ -83,6 +72,9 @@ public class Client {
      * @param tokenPath The endpoint on the SAND server to request an oauth token.
      */
     public Client(String clientId, String clientSecret, String tokenSite, String tokenPath) {
+        if (Util.isEmpty(clientId, clientSecret, tokenSite, tokenPath)) {
+            throw new IllegalArgumentException("Client credentials and token site and path are all required");
+        }
         iClientId = clientId;
         iClientSecret = clientSecret;
         iTokenSite = tokenSite;
@@ -109,8 +101,8 @@ public class Client {
      * @return HttpResponse from the requested Service
      */
     public HttpResponse request(String keyForCaching,
-                                String[] scopes,
-                                Function<String, HttpResponse> requestFunction) {
+            String[] scopes,
+            Function<String, HttpResponse> requestFunction) {
 
         return request(keyForCaching, scopes, DEFAULT_RETRY_COUNT, requestFunction);
     }
@@ -135,11 +127,11 @@ public class Client {
      * @return HttpResponse from the requested Service
      */
     public HttpResponse request(String keyForCaching,
-                                String[] scopes,
-                                int retries,
-                                Function<String, HttpResponse> requestFunction) {
+            String[] scopes,
+            int retries,
+            Function<String, HttpResponse> requestFunction) {
 
-        if (requestFunction == null || keyForCaching == null || keyForCaching.isEmpty()) {
+        if (requestFunction == null || Util.isEmpty(keyForCaching)) {
             return null;
         }
 
@@ -150,13 +142,12 @@ public class Client {
         HttpResponse response = null;
         int statusCode = accessDeniedStatusCode();
         String token;
-        
+
         do {
             if (requestRetry > 0) {
                 if (requestRetry > retries) {
                     return null;
                 }
-
                 removeCachedToken(cachingKey);
                 long secondsSleep = (long)Math.pow(2, requestRetry);
 
@@ -167,7 +158,7 @@ public class Client {
                 }
             }
 
-            token = getToken(cachingKey, scopes, retries);
+            token = getToken(keyForCaching, scopes, retries);
 
             if (token != null) {
                 response = requestFunction.apply(token);
@@ -188,27 +179,44 @@ public class Client {
      * and then doing a oauth token request to the SAND server.
      * If an oauth token is fetched, it will be cached.
      *
-     * @param cachingKey The key to use for checking the cache for a token or cache a token.
+     * @param keyForCaching The key to use for checking the cache for a token or cache a token.
      * @param scopes The scopes to fetch a token for.
      * @param retries Number of retires to try fetching a token.
      *
      * @return String token.
      */
-    protected String getToken(String cachingKey, String[] scopes, int retries) {
-        String token = getTokenFromCache(cachingKey);
+    public String getToken(String keyForCaching, String[] scopes, int retries) {
+        TokenResponse token = getOAuthToken(keyForCaching, scopes, retries);
+        return token.getToken();
+    }
 
-        if (token != null) {
-            return token;
+    /**
+     * Gets an access token by first checking the cache
+     * and then doing a oauth token request to the SAND server.
+     * If an oauth token is fetched, it will be cached.
+     *
+     * @param keyForCaching The key to use for checking the cache for a token or cache a token.
+     * @param scopes The scopes to fetch a token for.
+     * @param retries Number of retires to try fetching a token.
+     *
+     * @return TokenResponse token.
+     */
+    public TokenResponse getOAuthToken(String keyForCaching, String[] scopes, int retries) {
+        String cachingKey = cacheKey(keyForCaching, scopes, null, null);
+
+        TokenResponse item = getFromCache(cachingKey);
+        if (item != null) {
+            return item;
         }
 
-        JSONObject oauthToken = getOauthToken(scopes, retries);
-        token = readToken(oauthToken);
-
-        if (token != null) {
-            cacheToken(cachingKey, oauthToken);
+        JSONObject json = tokenRequest(scopes, retries);
+        if (json != null) {
+            item = new TokenResponse(json);
+            cacheToken(cachingKey, item);
+        } else {
+            item = null;
         }
-
-        return token;
+        return item;
     }
 
     /**
@@ -219,7 +227,7 @@ public class Client {
      *
      * @return JSONObject with token information.
      */
-    private JSONObject getOauthToken(String[] scopes, int retries) {
+    private JSONObject tokenRequest(String[] scopes, int retries) {
         TokenRequest tokenRequest = createTokenRequest(scopes);
 
         if (tokenRequest == null) {
@@ -296,7 +304,7 @@ public class Client {
         try {
             return new TokenRequest(
                     new URI(getTokenURL()),
-                    new ClientSecretBasic(getClientId(), getClientSecret()),
+                    new ClientSecretBasic(getClientID(), getClientSecret()),
                     new ClientCredentialsGrant(),
                     new Scope(scopes));
         } catch (URISyntaxException e) {
@@ -306,61 +314,17 @@ public class Client {
         }
     }
 
-    /**
-     * Reads the token from a SAND server token response.
-     *
-     * @param jsonToken The token response content.
-     *
-     * @return String the access token from the response content.
-     */
-    private static String readToken(JSONObject jsonToken) {
-        return jsonToken == null ? null : (String)jsonToken.get(ACCESS_TOKEN_PROPERTY);
-    }
+    private TokenResponse getFromCache(String cachingKey) {
+        TokenResponse item = null;
 
-    /**
-     * Fetches the token from the cache and returns it if it hasn't expired.
-     *
-     * @param cachingKey The key to look for in the cache.
-     *
-     * @return String the cached token.
-     */
-    private String getTokenFromCache(String cachingKey) {
-        String token = null;
-
-        if (cachingKey != null) {
-            JSONObject cachedToken = cTokenCache.getIfPresent(cachingKey);
-
-            if (isExpired(cachedToken)) {
-                 removeCachedToken(cachingKey);
-            }
-            else {
-                token = readToken(cachedToken);
+        if (!Util.isEmpty(cachingKey)) {
+            item = cTokenCache.getIfPresent(cachingKey);
+            if (item != null && item.isExpired()) {
+                removeCachedToken(cachingKey);
+                item = null;
             }
         }
-
-        return token;
-    }
-
-    /**
-     * Checks if the token expiry time has passsed.
-     * If the token doesn't have an expiry time, it's considered not expired.
-     *
-     * @param token The token object.
-     *
-     * @return boolean if the token has expired.
-     */
-    private boolean isExpired(JSONObject token) {
-        if (token != null) {
-            Long expires = (Long)token.getAsNumber(TOKEN_EXPIRES_PROPERTY);
-
-            if (expires != null) {
-                return System.currentTimeMillis() > expires;
-            }
-
-            return false;
-        }
-
-        return true;
+        return item;
     }
 
     /**
@@ -370,20 +334,9 @@ public class Client {
      * @param cachingKey The key to use for caching.
      * @param token The token to cache.
      */
-    private void cacheToken(String cachingKey, JSONObject token) {
-        if (cachingKey != null) {
-            if (token != null) {
-                Long expiresIn = (Long)token.getAsNumber(TOKEN_EXPIRES_IN_PROPERTY);
-
-                if (expiresIn == null) {
-                    expiresIn = DEFAULT_TOKEN_EXPIRES_IN_SECONDS;
-                }
-
-                long expires = System.currentTimeMillis() + expiresIn * 1_000L;
-                token.appendField(TOKEN_EXPIRES_PROPERTY, expires);
-
-                cTokenCache.put(cachingKey, token);
-            }
+    private void cacheToken(String cachingKey, TokenResponse token) {
+        if (!Util.isEmpty(cachingKey) && token != null) {
+            cTokenCache.put(cachingKey, token);
         }
     }
 
@@ -393,7 +346,7 @@ public class Client {
      * @param cachingKey The key to remove from the cache.
      */
     private void removeCachedToken(String cachingKey) {
-        if (cachingKey != null) {
+        if (!Util.isEmpty(cachingKey)) {
             cTokenCache.invalidate(cachingKey);
         }
     }
@@ -422,12 +375,12 @@ public class Client {
             sb.append(String.join("_", scopes));
         }
 
-        if (resource != null && !resource.isEmpty()) {
+        if (!Util.isEmpty(resource)) {
             sb.append("/");
             sb.append(resource);
         }
 
-        if (action != null && !action.isEmpty()) {
+        if (!Util.isEmpty(action)) {
             sb.append("/");
             sb.append(action);
         }
@@ -465,7 +418,7 @@ public class Client {
      */
     private int clientRequestRetryCount(int retries) {
         if (retries < 1) {
-            retries = DEFAULT_RETRY_COUNT < 1 ? 1 : DEFAULT_RETRY_COUNT;
+            retries = DEFAULT_RETRY_COUNT;
         }
 
         return retries;
@@ -481,7 +434,7 @@ public class Client {
      */
     private int tokenRequestRetryCount(int retries) {
         if (retries < 0) {
-            retries = DEFAULT_RETRY_COUNT < 0 ? 0 : DEFAULT_RETRY_COUNT;
+            retries = DEFAULT_RETRY_COUNT;
         }
 
         return retries;
@@ -507,8 +460,12 @@ public class Client {
         iTokenPath = tokenPath;
     }
 
-    public ClientID getClientId() {
+    public ClientID getClientID() {
         return new ClientID(iClientId);
+    }
+
+    public String getClientId() {
+        return iClientId;
     }
 
     public void setClientId(String clientId) {

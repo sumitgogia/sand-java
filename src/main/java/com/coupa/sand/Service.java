@@ -19,7 +19,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -31,22 +30,23 @@ import java.util.concurrent.TimeUnit;
  */
 public class Service extends Client {
     private static final Logger LOGGER = LoggerFactory.getLogger(Service.class);
+
     private static final String DEFAULT_TOKEN_VERIFY_PATH = "/warden/token/allowed";
-    private static final String[] DEFAULT_ACCESS_SCOPES = new String[] {"hydra"};
+    private static final String[] DEFAULT_SERVICE_SCOPES = new String[] {"hydra"};
     private static final String DEFAULT_SERVICE_CACHE_TYPE = "tokens";
     private static final Map<String, Object> DEFAULT_CONTEXT = Collections.EMPTY_MAP;
     private static final String SERVICE_CACHING_KEY = "service-access-token";
+
     private static final String TOKEN_VERIFICATION_FIELD_SCOPES = "scopes";
     private static final String TOKEN_VERIFICATION_FIELD_TOKEN = "token";
     private static final String TOKEN_VERIFICATION_FIELD_RESOURCE = "resource";
     private static final String TOKEN_VERIFICATION_FIELD_ACTION = "action";
     private static final String TOKEN_VERIFICATION_FIELD_CONTEXT = "context";
 
-    Client iClient = null;
     String iResource = null;
     Map<String, Object> iContext = DEFAULT_CONTEXT;
     String iTokenVerifyPath = DEFAULT_TOKEN_VERIFY_PATH;
-    String[] iScopes = DEFAULT_ACCESS_SCOPES;
+    String[] iScopes = DEFAULT_SERVICE_SCOPES;
 
     /**
      * Cache to avoid repeated calls to SAND server.
@@ -89,7 +89,7 @@ public class Service extends Client {
      * @param tokenVerifyPath The URI on the SAND server for verifying a token.
      */
     public Service(String clientId, String secret, String tokenSite, String tokenPath, String resource, String tokenVerifyPath) {
-        this(clientId, secret, tokenSite, tokenPath, resource, tokenVerifyPath, DEFAULT_ACCESS_SCOPES);
+        this(clientId, secret, tokenSite, tokenPath, resource, tokenVerifyPath, DEFAULT_SERVICE_SCOPES);
     }
 
     /**
@@ -105,7 +105,10 @@ public class Service extends Client {
      * @param scopes The scopes for fetching an authentication token to use for verifying a token.
      */
     public Service(String clientId, String secret, String tokenSite, String tokenPath, String resource, String tokenVerifyPath, String[] scopes) {
-        iClient = new Client(clientId, secret, tokenSite, tokenPath);
+        super(clientId, secret, tokenSite, tokenPath);
+        if (Util.isEmpty(resource, tokenVerifyPath)) {
+          throw new IllegalArgumentException("Service resource and token verification path are required");
+        }
         iResource = resource;
         iTokenVerifyPath = tokenVerifyPath;
         iScopes = scopes;
@@ -186,7 +189,7 @@ public class Service extends Client {
 
         String token = extractToken(request);
 
-        if (token == null || token.isEmpty()) {
+        if (Util.isEmpty(token)) {
             throw new AuthenticationException("Failed to extract the token from the request");
         }
 
@@ -231,9 +234,9 @@ public class Service extends Client {
      * @throws AuthenticationException if the Service should should return errorStatusCode()
      * to the requesting Client so that the Client will not retry.
      */
-    private AllowedResponse checkToken(String token, VerificationOptions options) throws AuthenticationException {
+    public AllowedResponse checkToken(String token, VerificationOptions options) throws AuthenticationException {
         String cachingKey = cacheKey(token, options.getTargetScopes(), options.getResource(), options.getAction());
-        AllowedResponse cachedAllowedResponse = getTokenResponseFromCache(token);
+        AllowedResponse cachedAllowedResponse = getTokenResponseFromCache(cachingKey);
 
         if (cachedAllowedResponse != null) {
             return  cachedAllowedResponse;
@@ -265,7 +268,7 @@ public class Service extends Client {
     private AllowedResponse verifyToken(String token, VerificationOptions options) throws AuthenticationException {
         String accessToken = getAccessToken(options.getNumRetries());
 
-        if (accessToken == null || accessToken.isEmpty()) {
+        if (Util.isEmpty(accessToken)) {
             throw new AuthenticationException("Could not get a service access token");
         }
 
@@ -327,7 +330,7 @@ public class Service extends Client {
                                                     VerificationOptions options,
                                                     String accessToken) {
 
-        HttpPost httpPost = new HttpPost(iClient.getTokenSite() + iTokenVerifyPath);
+        HttpPost httpPost = new HttpPost(getTokenSite() + iTokenVerifyPath);
         httpPost.setHeader(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken);
         httpPost.setHeader(HttpHeaders.ACCEPT, "application/json");
         httpPost.setHeader(HttpHeaders.CONTENT_TYPE, "application/json");
@@ -356,7 +359,7 @@ public class Service extends Client {
     private String getAccessToken(int numRetries) {
         String cachingKey = cacheKey(SERVICE_CACHING_KEY, iScopes, null, null);
 
-        return iClient.getToken(cachingKey, iScopes, numRetries);
+        return getToken(cachingKey, iScopes, numRetries);
     }
 
     /**
@@ -427,79 +430,6 @@ public class Service extends Client {
     private void removeCachedTokenResponse(String cachingKey) {
         if (cachingKey != null) {
             cTokenResponseCache.invalidate(cachingKey);
-        }
-    }
-
-    // class for setting options a token should be verified against.
-    class VerificationOptions {
-        String[] iTargetScopes;
-        String iAction;
-        String iResource;
-        Map<String, String> iContext = new HashMap<>();
-        int iNumRetries;
-
-        /**
-         * Constructor that will throw an AuthenticationException
-         * if the resource parameter is empty.
-         *
-         * @param targetScopes The scopes to verify the token against.
-         * @param action The action to verify the token against.
-         * @param resource The resource to verify the token against.
-         * @param numRetries Number of retries to get an access token for the verification.
-         */
-        public VerificationOptions(String[] targetScopes,
-                                   String action,
-                                   String resource,
-                                   int numRetries) throws AuthenticationException {
-
-            if (resource == null || resource.isEmpty()) {
-                throw new AuthenticationException("This Service has no configured resource");
-            }
-
-            iTargetScopes = targetScopes;
-            iResource = resource;
-            iAction = action;
-            iNumRetries = numRetries;
-        }
-
-        public String[] getTargetScopes() {
-            return iTargetScopes;
-        }
-
-        public void setTargetScopes(String[] targetScopes) {
-            iTargetScopes = targetScopes;
-        }
-
-        public String getResource() {
-            return iResource;
-        }
-
-        public void setResource(String resource) {
-            iResource = resource;
-        }
-
-        public String getAction() {
-            return iAction;
-        }
-
-        public void setAction(String action) {
-            iAction = action;
-        }
-
-        public Map<String, String> getContext() {
-            return iContext;
-        }
-
-        public void setContext(Map<String, String> context) {
-            iContext = context;
-        }
-
-        public int getNumRetries() {
-            return iNumRetries;
-        }
-
-        public void setNumRetries(int numRetries) {
-            iNumRetries = numRetries;
         }
     }
 }
