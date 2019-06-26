@@ -72,8 +72,8 @@
           <version>3.8.0</version>
           <configuration>
             <!-- specify current java version here: -->
-            <source>11</source>
-            <target>11</target> <!-- or edit these in your properties -->
+            <source>1.8</source>
+            <target>1.8</target> <!-- or edit these in your properties -->
           </configuration>
         </plugin>
         <plugin>
