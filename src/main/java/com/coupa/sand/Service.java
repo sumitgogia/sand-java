@@ -248,7 +248,7 @@ public class Service extends Client {
             return new AllowedResponse(false);
         }
         else {
-            cacheTokenResponse(token, verifyTokenResponse);
+            cacheTokenResponse(cachingKey, verifyTokenResponse);
         }
 
         return verifyTokenResponse;
@@ -266,7 +266,7 @@ public class Service extends Client {
      * to the requesting Client so that the Client will not retry.
      */
     private AllowedResponse verifyToken(String token, VerificationOptions options) throws AuthenticationException {
-        String accessToken = getAccessToken(options.getNumRetries());
+        String accessToken = getToken(SERVICE_CACHING_KEY, iScopes, options.getNumRetries());
 
         if (Util.isEmpty(accessToken)) {
             throw new AuthenticationException("Could not get a service access token");
@@ -346,20 +346,6 @@ public class Service extends Client {
         httpPost.setEntity(postParams);
 
         return httpPost;
-    }
-
-    /**
-     * Get an access token for the SAND server token verification endpoint.
-     * Cache will be used to reduce requests to the SAND server.
-     *
-     * @param numRetries Number of retries to fetch the access token from the SAND server.
-     *
-     * @return String the access token.
-     */
-    private String getAccessToken(int numRetries) {
-        String cachingKey = cacheKey(SERVICE_CACHING_KEY, iScopes, null, null);
-
-        return getToken(cachingKey, iScopes, numRetries);
     }
 
     /**
