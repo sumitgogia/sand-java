@@ -204,7 +204,6 @@ public class Client {
     /**
      * Makes a Client request to a Service by applying a token to the requestFunction parameter.
      * Will fetch new tokens and perform retries (at least one) if the response is 401.
-     * Will use the default retry count;
      *
      * @param keyForCaching Key that will be used to build a caching key for storing request tokens.
      * @param scopes The scopes that the token will be created for.
