@@ -8,6 +8,7 @@ import com.nimbusds.oauth2.sdk.auth.Secret;
 import com.nimbusds.oauth2.sdk.http.HTTPResponse;
 import com.nimbusds.oauth2.sdk.id.ClientID;
 import net.minidev.json.JSONObject;
+
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
 import org.slf4j.Logger;
@@ -172,6 +173,99 @@ public class Client {
         } while (statusCode == accessDeniedStatusCode());
 
         return response;
+    }
+    
+    /**
+     * Makes a Client request to a Service by applying a token to the requestFunction parameter.
+     * Will fetch new tokens and perform retries (at least one) if the response is 401.
+     * Will use the default retry count;
+     *
+     * @param keyForCaching Key that will be used to build a caching key for storing request tokens.
+     * @param scopes The scopes that the token will be created for.
+     * @param requestFunction A function that will take a String token, make a request and return a GenericResponse.
+     *                        Example:
+     *                        public static GenericResponse<OKHTTP> requestWithToken(String token) {
+     *                          //  Create a request to a Service
+     *                          //  with "Bearer #{token}" in the Authorization header
+     *                          //  execute the request and return the GenericResponse with the status code and response object set.
+     *
+     *                          return GenericResponse;
+     *                        }
+     *
+     * @return R from the requested Service
+     */
+    public <R> R genericRequest(String keyForCaching,
+            String[] scopes,
+            Function<String, GenericResponse<R>> requestFunction) {
+
+        return genericRequest(keyForCaching, scopes, DEFAULT_RETRY_COUNT, requestFunction);
+    }
+
+    /**
+     * Makes a Client request to a Service by applying a token to the requestFunction parameter.
+     * Will fetch new tokens and perform retries (at least one) if the response is 401.
+     *
+     * @param keyForCaching Key that will be used to build a caching key for storing request tokens.
+     * @param scopes The scopes that the token will be created for.
+     * @param retries Number of retries that will be done trying to fetch a token and to make the request.
+     * @param requestFunction A function that will take a String token, make a request and return a GenericResponse.
+     *                        Example:
+     *                        public static GenericResponse<OKHTTP> requestWithToken(String token) {
+     *                          //  Create a request to a Service
+     *                          //  with "Bearer #{token}" in the Authorization header
+     *                          //  execute the request and return the GenericResponse with the status code and response object set.
+     *
+     *                          return GenericResponse;
+     *                        }
+     *
+     * @return R from the requested Service
+     */
+    public <R> R genericRequest(String keyForCaching,
+            String[] scopes,
+            int retries,
+            Function<String, GenericResponse<R>> requestFunction) {
+    	
+        if (requestFunction == null || Util.isEmpty(keyForCaching)) {
+            return null;
+        }
+
+        int requestRetry = 0;
+        retries = clientRequestRetryCount(retries);
+        String cachingKey = cacheKey(keyForCaching, scopes, null, null);
+
+        GenericResponse<R> response = null;
+        int statusCode = accessDeniedStatusCode();
+        String token;
+
+        do {
+            if (requestRetry > 0) {
+                if (requestRetry > retries) {
+                    return null;
+                }
+                removeCachedToken(cachingKey);
+                long secondsSleep = (long)Math.pow(2, requestRetry);
+
+                try {
+                    Thread.sleep(1_000L * secondsSleep);
+                } catch (InterruptedException e) {
+                    LOGGER.error("Sleep before retrying SAND authentication was interrupted.", e);
+                }
+            }
+
+            token = getToken(keyForCaching, scopes, retries);
+
+            if (token != null) {
+            	response = requestFunction.apply(token);
+
+                if (response != null && response.getResponse() != null) {
+                    statusCode = response.getStatusCode();
+                }
+            }
+
+            requestRetry++;
+        } while (statusCode == accessDeniedStatusCode());
+
+        return response != null? response.getResponse() : null;
     }
 
     /**
