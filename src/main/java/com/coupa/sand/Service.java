@@ -336,11 +336,11 @@ public class Service extends Client {
         httpPost.setHeader(HttpHeaders.CONTENT_TYPE, "application/json");
 
         JSONObject jsonPostParams = new JSONObject();
-        jsonPostParams.appendField(TOKEN_VERIFICATION_FIELD_SCOPES, options.getTargetScopes());
-        jsonPostParams.appendField(TOKEN_VERIFICATION_FIELD_TOKEN, token);
-        jsonPostParams.appendField(TOKEN_VERIFICATION_FIELD_RESOURCE, options.getResource());
-        jsonPostParams.appendField(TOKEN_VERIFICATION_FIELD_ACTION, options.getAction());
-        jsonPostParams.appendField(TOKEN_VERIFICATION_FIELD_CONTEXT, options.getContext());
+        jsonPostParams.put(TOKEN_VERIFICATION_FIELD_SCOPES, options.getTargetScopes());
+        jsonPostParams.put(TOKEN_VERIFICATION_FIELD_TOKEN, token);
+        jsonPostParams.put(TOKEN_VERIFICATION_FIELD_RESOURCE, options.getResource());
+        jsonPostParams.put(TOKEN_VERIFICATION_FIELD_ACTION, options.getAction());
+        jsonPostParams.put(TOKEN_VERIFICATION_FIELD_CONTEXT, options.getContext());
 
         HttpEntity postParams = new StringEntity(jsonPostParams.toString(), StandardCharsets.UTF_8);
         httpPost.setEntity(postParams);
